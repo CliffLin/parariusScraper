@@ -4,17 +4,10 @@ from datetime import datetime
 import requests
 import pandas as pd
 import os
+import json
 
 # List of request headers, extracted & filtered from chrome dev tools
-HEADERS = {
-    "method": "GET",
-    "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/104.0.5112.102 Safari/537.36",
-    "scheme": "https",
-    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-    "accept-encoding": "gzip, deflate, br",
-    "accept-language": "en-US,en;q=0.5",
-    "upgrade-insecure-requests": "1"
-}
+HEADERS = {}
 
 ######################################################################################################################
 # Description: Returns an array of strings with the required URLs to scrape, with all filters applied & 
@@ -24,11 +17,11 @@ HEADERS = {
 #   pageCount -> int: Total number of pages you want the scraper to traverse and get the results from.
 # Returns: An array of strings with the required URLs which can be directly called. 
 ######################################################################################################################
-def UrlList(baseUrl: str, pageCount: int) -> list[str]:
+def UrlList(baseUrl: str, pageCount: int, header=HEADERS) -> list[str]:
     # Try fetching URL and return an empty array if the response is not successful
     try:
         print("Fetching URL: ", baseUrl)
-        response = requests.get(baseUrl, headers=HEADERS)
+        response = requests.get(baseUrl, headers=header, allow_redirects=True)
         response.raise_for_status
     except:
         print("Error fetching URL: ", baseUrl)
@@ -46,6 +39,9 @@ def UrlList(baseUrl: str, pageCount: int) -> list[str]:
 
     urlList = []
     for i in range(pageCount):
+        if i == 0:
+            urlList.append(baseUrl)
+            continue
         url = baseUrl + "/page-" + str(i+1)
         urlList.append(url)
 
@@ -62,26 +58,21 @@ def UrlList(baseUrl: str, pageCount: int) -> list[str]:
 #   newPref  -> bool: The user preference if they only want new listings i.e. True if yes, otherwise False
 # Returns: Returns a 2D array with all the parsed info in its appropriate format
 ######################################################################################################################
-def fetchData(city="amsterdam", minPrice=0, maxPrice=60000,interior="", newPref=False):
+def fetchData(city="amsterdam", minPrice=0, maxPrice=60000,interior="", newPref=False, header=HEADERS):
     baseUrl = "https://www.pararius.com/apartments/" + city + "/" + str(minPrice) + "-" + str(maxPrice)
     
     if(len(interior) != 0):
         baseUrl += "/" + interior
 
-    while(True):
-        try:
-            pageCount = int(input("How many webpages of data would you like to parse : "))
-            break
-        except:
-            print("Enter a valid value!! Only integers allowed!")
+    pageCount = 1 
 
-    urlList = UrlList(baseUrl, pageCount)
+    urlList = UrlList(baseUrl, pageCount, header=header)
 
     excelData = []
     for url in urlList:
         try:
             print("Fetching URL: ", url)
-            response = requests.get(url, headers=HEADERS)
+            response = requests.get(url, headers=header)
             response.raise_for_status
         except:
             print("Error fetching URL: ", baseUrl)
@@ -94,7 +85,6 @@ def fetchData(city="amsterdam", minPrice=0, maxPrice=60000,interior="", newPref=
         for listing in listingsSection:
             # Extracting listing's name
             listingName = (listing.section.h2.a.string).strip()
-
             # Extracting listing's status (New/Highlighted/Rented Under Options ...)
             listingLabelHTML = listing.section.find("div", class_="listing-search-item__label")
             listingStatus = ( (listingLabelHTML.span.string).strip() if listingLabelHTML != None else "")
@@ -112,7 +102,7 @@ def fetchData(city="amsterdam", minPrice=0, maxPrice=60000,interior="", newPref=
             listingInterior = (listingFeatures[2].string).strip()
 
             # Extracting listing's Pin Code and location
-            listingLocation = (listing.section.find("div", class_="listing-search-item__sub-title").string).strip()
+            listingLocation = (listing.section.find("div", class_="listing-search-item__sub-title'").string).strip()
 
             # Extracting listing's pararius link
             listingLink = "https://www.pararius.com" + listing.section.h2.a["href"]
@@ -129,100 +119,3 @@ def fetchData(city="amsterdam", minPrice=0, maxPrice=60000,interior="", newPref=
         print("Phew! that was a lot of scraping. I'll need a coffee after this':)")
 
     return excelData
-
-######################################################################################################################
-# Description: Creates an outputs folder, if it doesn't exist and exports a 2D array into an excel file 
-#              with proper naming convention via pandas.
-# Parameters:
-#   excelData -> List[List[]]: The 2D array which needs to be exported
-# Returns: Nothing lol. Just exports the data into an excel file within outputs folder!
-######################################################################################################################
-def exportDataToExcel(excelData):
-    # Extract current date and time
-    currentDateTime = datetime.now()
-    currentYear = str(currentDateTime.year)
-    currentMonth = str(currentDateTime.month)
-    currentDay = str(currentDateTime.day)
-    currentHour = str(currentDateTime.hour)
-    currentMinute = str(currentDateTime.minute)
-    currentSecond = str(currentDateTime.second)
-
-    # Create outputs directory if it doesn't exist
-    os.makedirs('outputs', exist_ok=True)
-
-    # Construct the filename and the excel sheet headers
-    fileName = "Pararius_Scrape_" + currentDay + "-" + currentMonth + "-" + currentYear + "-" + currentHour+currentMinute+currentSecond+".xlsx"
-    excelHeaders = ["Name", "Status", "Rent Amount (in EUR)","Surface Area", "Number of rooms", "Interiors", "Location", "Listing Link", "Estate Agent Name", "Estate Agent Link"]
-
-    # Create pandas dataframe with export it with openpyxl engine, freezing the top row and removing indexes from rows.
-    pdData = pd.DataFrame(excelData)
-    pdData.to_excel(fileName, freeze_panes=(1, 0), engine="openpyxl", header=excelHeaders, index=False)
-    
-    # Move the generated excel sheet into the outputs folder
-    os.replace(fileName, "./outputs/"+fileName)
-
-# User input for the city and converting it into lowercase
-print("Enter the city name where you want to search for rentals")
-city = input().lower()
-
-# Taking user input for minimum rental price and validating it
-while(True):
-    try:
-        print("Enter the minimum rental price for the properties you're interested in (Leave blank and press enter if you have no preference)")
-        minPrice = int(input())
-        break
-    except:
-        print("Please enter a positive integer value!")
-
-# Taking user input for maximum rental price and validating it
-while(True):
-    try:
-        print("Enter the maximum rental price for the properties you're interested in (Leave blank and press enter if you have no preference)")
-        maxPrice = int(input())
-        break
-    except:
-        print("Please enter a positive integer value!")
-
-# Taking user input for interior preference and validating it
-while(True):
-    try:
-        print("Enter the type of interiors you're interested in")
-        print("1 - Shell")
-        print("2 - Upholstered")
-        print("3 - Furnished")
-        print("4 - No Perference!")
-        interior = int(input("Enter your input: "))
-        break
-    except:
-        print("Please enter a value from the above options or just press enter!")
-
-# Taking user input if they want only new listings
-while(True):
-    try:
-        print("Are you ONLY interested in new listing?")
-        print("1 - Yes")
-        print("2 - No")
-        newPref = int(input("Enter your input: "))
-        break
-    except:
-        print("Please enter a value from the above options only!")
-
-# Mapping for user preference for new properties
-newMapping = {
-    1: True,
-    2: False
-}
-
-# Mapping for interior options to their URL keywords
-interiorMapping = {
-    1: "shell",
-    2: "upholstered",
-    3: "furnished",
-    4: ""
-}
-
-# Get all the required data
-excelData = fetchData(city=city, minPrice=minPrice, maxPrice=maxPrice, interior=interiorMapping[interior], newPref=newMapping[newPref])
-
-# Export the fetched data
-exportDataToExcel(excelData)
